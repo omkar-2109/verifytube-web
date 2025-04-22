@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VerifyTube Web Fact‑Checker</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; padding: 0 1em; }
+    input[type=text] { width: 70%; padding: 0.5em; }
+    button { padding: 0.5em 1em; margin-left: 0.5em; }
+    .error { color: crimson; margin-top: 1em; }
+    .section { margin-top: 2em; padding: 1em; border: 1px solid #ccc; border-radius: 8px; }
+    .section h2 { margin-top: 0; }
+    ul { list-style: none; padding-left: 0; }
+    ul li { padding: 0.5em 0; border-bottom: 1px solid #eee; }
+    ul li:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+
+  <h1>VerifyTube Web Fact‑Checker</h1>
+  <form method="post">
+    <label for="url">YouTube Video URL:</label><br/>
+    <input type="text" id="url" name="url" placeholder="https://www.youtube.com/watch?v=…" value="{{ url|e }}"/>
+    <button type="submit">Check</button>
+  </form>
+
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+
+  {% if transcript %}
+    <div class="section">
+      <h2>Transcript</h2>
+      <p>{{ transcript }}</p>
+    </div>
+    <div class="section">
+      <h2>Fact‑Check Results</h2>
+      {% if claims and verdicts %}
+        <ul>
+          {% for i in range(claims|length) %}
+            <li>
+              <strong>{{ claims[i] }}</strong><br/>
+              Verdict: <em>{{ verdicts[i] }}</em>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>No claims found.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+
+</body>
+</html>
