@@ -1,98 +1,112 @@
 import re
 import os
 import subprocess
+import io
+
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 import google.generativeai as genai
 
 
 def get_video_id(url: str) -> str | None:
-    """Extract a YouTube video ID from full URL."""
-    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
+    """Extract the 11‑char video ID from various YouTube URL forms."""
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
     return match.group(1) if match else None
 
 
 def fetch_transcript_yta(video_id: str) -> str | None:
-    """Try YouTubeTranscriptApi (official transcript)."""
+    """Try the youtube_transcript_api (auto & hi fallback)."""
     try:
-        entries = YouTubeTranscriptApi.get_transcript(video_id, languages=['en-US'])
-        return ' '.join(e['text'] for e in entries)
+        data = YouTubeTranscriptApi.get_transcript(video_id, languages=["en-US"])
+        return " ".join(item["text"] for item in data)
     except TranscriptsDisabled:
         return None
     except Exception:
-        # fallback to any automatic language
+        # fallback Hindi auto subtitles
         try:
-            entries = YouTubeTranscriptApi.get_transcript(video_id, languages=['hi'])
-            return ' '.join(e['text'] for e in entries)
+            data = YouTubeTranscriptApi.get_transcript(video_id, languages=["hi"])
+            return " ".join(item["text"] for item in data)
         except Exception:
             return None
 
 
 def fetch_transcript_yt_dlp(url: str) -> str | None:
-    """Fallback: use yt-dlp to download auto-captions."""
+    """
+    Fallback via yt-dlp’s auto-subtitles. Downloads .vtt and returns its text.
+    """
     vid = get_video_id(url)
     if not vid:
         return None
-    vtt_file = f'{vid}.en.vtt'
+
+    out_vtt = f"{vid}.en.vtt"
     cmd = [
-        'yt-dlp',
-        '--write-auto-sub',
-        '--sub-lang', 'en',
-        '--skip-download',
-        '--output', f'{vid}.en.%(ext)s',
+        "yt-dlp",
+        "--write-auto-sub",
+        "--sub-lang", "en",
+        "--skip-download",
+        "--output", f"{vid}.en.%(ext)s",
         url
     ]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.isfile(vtt_file):
-            return open(vtt_file, 'r', encoding='utf-8').read()
+        if os.path.isfile(out_vtt):
+            return open(out_vtt, "r", encoding="utf-8").read().strip()
     except Exception:
         pass
+
     return None
 
 
-def fetch_transcript_gdata(video_id: str) -> str | None:
+def fetch_transcript_gdata_oauth(credentials, video_id: str) -> str | None:
     """
-    List captions via YouTube Data API.
-    (NOTE: downloading caption body via API key alone is not supported.)
+    Use an OAuth‑authorized YouTube Data API client to download the caption track.
     """
-    api_key = os.environ.get('YOUTUBE_API_KEY')
-    if not api_key:
-        return None
-
-    yt = build('youtube', 'v3', developerKey=api_key)
-    resp = yt.captions().list(part='snippet', videoId=video_id).execute()
-    items = resp.get('items', [])
+    youtube = build("youtube", "v3", credentials=credentials)
+    resp = youtube.captions().list(part="snippet", videoId=video_id).execute()
+    items = resp.get("items", [])
     if not items:
         return None
-    # cannot download actual caption track with API key only
-    return None
+
+    caption_id = items[0]["id"]
+    request = youtube.captions().download(id=caption_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    return fh.getvalue().decode("utf-8")
 
 
 def generate_fact_check(transcript: str) -> str:
     """
-    Call Vertex AI (Gemini) to fact‑check the transcript.
-    Returns a raw JSON‑ish string.
+    Call Vertex AI / Gemini to extract claims & verdicts as JSON.
     """
-    # Configure via Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS
-    genai.configure(api_key=None)
-
-    client = genai.Client(
+    # Make sure to set GOOGLE_CLOUD_PROJECT env var to your GCP project ID.
+    genai.configure(
+        api_key=None,
         vertexai=True,
-        project=os.environ.get('GOOGLE_CLOUD_PROJECT'),
-        location='us-central1'
+        project=os.environ["GOOGLE_CLOUD_PROJECT"],
+        location="us-central1",
     )
+    prompt = f\"\"\"
+You are a fact‑checking AI. Extract ONLY the news‑related claims from the transcript below,
+verify each claim’s accuracy, and return a JSON object:
 
-    prompt = f"""
-You are a fact‑checking AI. Extract only news‑related claims from the transcript below, verify each, 
-and output JSON with two arrays: "claims" and "verdicts".
+  {{
+    "claims": ["claim1", "claim2", …],
+    "verdicts": ["true"/"false"/"misleading"/…]
+  }}
 
 Transcript:
-\"\"\"{transcript}\"\"\"
-"""
+---
+{transcript}
+---
+\"\"\"
+    client = genai.Client()
     contents = [
         genai.types.Content(
-            role='user',
+            role="user",
             parts=[genai.types.Part.from_text(prompt)]
         )
     ]
@@ -101,14 +115,14 @@ Transcript:
         temperature=0,
         top_p=1,
         max_output_tokens=2048,
-        response_modalities=['TEXT'],
+        response_modalities=["TEXT"],
         tools=tools,
-        system_instruction=[genai.types.Part.from_text('You are a precise fact‑checker.')]
+        system_instruction=[genai.types.Part.from_text("You are a precise fact‑checker.")]
     )
 
-    out = ''
+    out = ""
     for chunk in client.models.generate_content_stream(
-        model='gemini-2.5-pro-exp-03-25',
+        model="gemini-2.5-pro-exp-03-25",
         contents=contents,
         config=config
     ):
