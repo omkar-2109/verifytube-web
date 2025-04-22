@@ -1,18 +1,38 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>VerifyTube Fact‑Checker</title>
   <style>
-    body { background:#121212; color:#eee; font-family:sans-serif; padding:2rem; }
-    input, button { font-size:1rem; padding:0.5rem; margin:0.5rem 0; width:100%; }
-    pre { background:#1e1e1e; padding:1rem; white-space:pre-wrap; }
+    body {
+      background: #121212;
+      color: #eee;
+      font-family: sans-serif;
+      padding: 2rem;
+      max-width: 600px;
+      margin: auto;
+    }
+    input, button {
+      font-size: 1rem;
+      padding: 0.5rem;
+      margin: 0.5rem 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    pre {
+      background: #1e1e1e;
+      padding: 1rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .error { color: #f88; }
+    h1 { margin-bottom: 1rem; }
   </style>
 </head>
 <body>
   <h1>VerifyTube Fact‑Checker</h1>
   <form id="form">
-    <label>Enter YouTube URL:</label>
+    <label for="url">Enter YouTube URL:</label>
     <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=..." required>
     <button type="submit">Fact‑Check</button>
   </form>
@@ -20,26 +40,26 @@
 
   <script>
     const form = document.getElementById('form'),
-          out = document.getElementById('output');
+          out  = document.getElementById('output');
 
     form.addEventListener('submit', async e => {
       e.preventDefault();
       out.innerHTML = '<p>Loading…</p>';
-      const url = document.getElementById('url').value;
+      const url = document.getElementById('url').value.trim();
       try {
-        let res = await fetch('/fact-check', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({url})
+        const resp = await fetch('/fact-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
         });
-        let js = await res.json();
+        const js = await resp.json();
         if (js.error) {
-          out.innerHTML = `<p style="color:salmon">${js.error}</p>`;
+          out.innerHTML = `<p class="error">${js.error}</p>`;
         } else {
           out.innerHTML = `<pre>${js.result}</pre>`;
         }
-      } catch(err) {
-        out.innerHTML = `<p style="color:salmon">${err}</p>`;
+      } catch (err) {
+        out.innerHTML = `<p class="error">${err}</p>`;
       }
     });
   </script>
