@@ -1,0 +1,8 @@
+Flask
+flask-cors
+google-generativeai
+youtube-transcript-api
+google-api-python-client
+google-auth
+gunicorn
+requests
