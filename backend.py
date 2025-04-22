@@ -1,79 +1,92 @@
-# backend.py
-import os
 import re
-import json
+import os
+import subprocess
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
+from googleapiclient.discovery import build
 import google.generativeai as genai
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-
-# Vertex AI / Gemini config via env‐vars
-GENAI_PROJECT  = os.environ.get("GCP_PROJECT",  "skillful-cider-451510-j7")
-GENAI_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 
 def get_video_id(url: str) -> str | None:
-    """Extract the 11‑char YouTube ID from any common URL form."""
-    m = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", url)
-    return m[1] if m else None
+    m = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
+    return m.group(1) if m else None
 
-def get_transcript(video_id: str) -> str | None:
-    """
-    Fetch any available transcript (manual or auto) via youtube‐transcript‐api.
-    Returns a single concatenated string, or None if unavailable.
-    """
+def fetch_transcript_yta(video_id: str) -> str | None:
     try:
-        subs = YouTubeTranscriptApi.get_transcript(video_id)
-        return " ".join(item["text"] for item in subs)
-    except (TranscriptsDisabled, NoTranscriptFound) as e:
-        print(f"[WARN] No transcript for {video_id}: {e}")
+        subs = YouTubeTranscriptApi.get_transcript(video_id, languages=['en-US'])
+        return ' '.join([e['text'] for e in subs])
+    except TranscriptsDisabled:
         return None
-    except Exception as e:
-        print(f"[ERROR] Transcript fetch error for {video_id}: {e}")
+    except:
+        try:
+            subs = YouTubeTranscriptApi.get_transcript(video_id, languages=['hi'])
+            return ' '.join([e['text'] for e in subs])
+        except:
+            return None
+
+def fetch_transcript_yt_dlp(url: str) -> str | None:
+    """Fallback via yt-dlp auto‑subtitles."""
+    fn = 'subtitles.txt'
+    cmd = [
+        'yt-dlp', '--write-auto-sub', '--sub-lang', 'en',
+        '--skip-download', '--output', '%(id)s.vtt', url
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+        vid = get_video_id(url)
+        with open(f'{vid}.en.vtt', 'r', encoding='utf-8') as f:
+            text = f.read()
+        return text
+    except:
         return None
 
-def generate_fact_check(transcript: str) -> dict:
-    """
-    Send transcript into Gemini for fact‐checking.
-    Expects JSON output of the form {"claims":[…],"verdicts":[…]}.
-    """
+def fetch_transcript_gdata(video_id: str) -> str | None:
+    """Use YouTube Data API to get captions list (body download needs OAuth2)."""
+    key = os.environ.get('YOUTUBE_API_KEY')
+    if not key:
+        return None
+    yt = build('youtube', 'v3', developerKey=key)
+    resp = yt.captions().list(part='snippet', videoId=video_id).execute()
+    items = resp.get('items', [])
+    if not items:
+        return None
+    # NOTE: downloading caption body via API key alone is not supported.
+    return None
+
+def generate_fact_check(transcript: str) -> str:
+    genai.configure(api_key=None)              # use ADC or GOOGLE_APPLICATION_CREDENTIALS
     client = genai.Client(
-        vertexai=True,
-        project=skillful-cider-451510-j7,
-        location=us-central1,
+      vertexai=True,
+      project=os.environ.get('GOOGLE_CLOUD_PROJECT'),
+      location='us-central1'
     )
 
     prompt = f"""
-You are a fact‐checking AI. Extract ONLY news‐related claims from the transcript below,
-verify them, and output EXACTLY a JSON object:
-
-{{
-  "claims": ["claim1", "claim2", …],
-  "verdicts": ["true", "false", "misleading", …]
-}}
-
+You are a fact‑checking AI. Extract only news‑related claims from the transcript below, verify each claim, 
+and respond in JSON with two arrays: "claims" and "verdicts".
 Transcript:
 \"\"\"{transcript}\"\"\"
 """
-    contents = [genai.types.Content(role="user",
-                                    parts=[genai.types.Part.from_text(prompt)])]
-    tools  = [genai.types.Tool(google_search=genai.types.GoogleSearch())]
-    config = genai.types.GenerateContentConfig(
-        temperature=0,
-        top_p=1,
-        seed=0,
-        max_output_tokens=4096,
-        response_modalities=["TEXT"],
-        tools=tools,
-        system_instruction=[genai.types.Part.from_text("You are a precise fact‐checker.")]
+    contents = [
+      genai.types.Content(
+        role='user',
+        parts=[genai.types.Part.from_text(prompt)]
+      )
+    ]
+    tools = [genai.types.Tool(google_search=genai.types.GoogleSearch())]
+    cfg = genai.types.GenerateContentConfig(
+      temperature=0,
+      top_p=1,
+      max_output_tokens=2048,
+      tools=tools,
+      response_modalities=['TEXT'],
+      system_instruction=[genai.types.Part.from_text('You are a precise fact-checker.')]
     )
 
-    out = ""
+    out = ''
     for chunk in client.models.generate_content_stream(
-            model="gemini-2.5-pro-exp-03-25",
-            contents=contents,
-            config=config):
-        out += chunk.text
-
-    # parse JSON
-    try:
-        return json.loads(out.strip())
-    except Exception as e:
-        raise ValueError(f"AI output is not valid JSON: {e}\n---\n{out}")
+      model='gemini-2.5-pro-exp-03-25',
+      contents=contents,
+      config=cfg
+    ):
+        if chunk.candidates:
+            out += chunk.text
+    return out.strip()
