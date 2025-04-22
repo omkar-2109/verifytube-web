@@ -1,9 +1,17 @@
 Flask==2.3.2
 flask-cors==5.0.1
 gunicorn==23.0.0
+
+# Google OAuth + YouTube Data API
 google-auth==2.39.0
+google-auth-oauthlib==1.0.0
 google-api-python-client==2.167.0
+
+# Vertex AI / Generative AI
 google-generativeai==0.8.5
+
+# Transcript libraries
 youtube-transcript-api==1.0.3
 yt-dlp==2025.3.31
+
 requests==2.32.3
